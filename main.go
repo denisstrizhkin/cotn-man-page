@@ -1,8 +1,11 @@
 package main
 
 import (
-	"fmt"
 	"math/rand"
+	"os"
+	"os/exec"
+	"regexp"
+	"strings"
 	"time"
 
 	rl "github.com/gen2brain/raylib-go/raylib"
@@ -24,15 +27,43 @@ type Star struct {
 	size  float32
 }
 
+func getManPage(page string) string {
+	// Execute man command with col -b to strip backspace formatting
+	cmd := exec.Command("man", page)
+	// Force plain text output by setting TERM to dumb
+	cmd.Env = append(os.Environ(), "TERM=dumb")
+	out, err := cmd.Output()
+	if err != nil {
+		return "Error: Could not find manual page for '" + page + "'"
+	}
+
+	// Regex to clean up any remaining weirdness
+	content := string(out)
+	// Remove backspace overstrikes (e.g., 'm\bman' -> 'man')
+	re := regexp.MustCompile(".\x08")
+	content = re.ReplaceAllString(content, "")
+
+	return content
+}
+
 func main() {
+	// Get page from args or default to mtx_init
+	pageName := "mtx_init"
+	if len(os.Args) > 1 {
+		pageName = os.Args[1]
+	}
+
+	manContent := getManPage(pageName)
+	manLines := strings.Split(manContent, "\n")
+
 	rand.Seed(time.Now().UnixNano())
 
 	const (
 		screenWidth  = 1000
-		screenHeight = 850
+		screenHeight = 900
 	)
 
-	rl.InitWindow(screenWidth, screenHeight, "mtx(3) - Call of the Night Manual")
+	rl.InitWindow(screenWidth, screenHeight, "COTN Docs - "+pageName)
 	defer rl.CloseWindow()
 
 	rl.SetTargetFPS(60)
@@ -43,12 +74,35 @@ func main() {
 		stars[i] = Star{
 			x:     rand.Float32() * screenWidth,
 			y:     rand.Float32() * screenHeight,
-			speed: 0.2 + rand.Float32()*0.8,
+			speed: 0.1 + rand.Float32()*0.5,
 			size:  0.5 + rand.Float32()*1.5,
 		}
 	}
 
+	scrollY := float32(0)
+
 	for !rl.WindowShouldClose() {
+		// Input handling for scrolling
+		wheel := rl.GetMouseWheelMove()
+		if wheel != 0 {
+			scrollY += wheel * 30
+		}
+		if rl.IsKeyDown(rl.KeyDown) {
+			scrollY -= 5
+		}
+		if rl.IsKeyDown(rl.KeyUp) {
+			scrollY += 5
+		}
+
+		// Clamp scrolling
+		maxScroll := -float32(len(manLines)*22) + (screenHeight - 200)
+		if scrollY > 0 {
+			scrollY = 0
+		}
+		if scrollY < maxScroll && maxScroll < 0 {
+			scrollY = maxScroll
+		}
+
 		// Update Stars
 		for i := range stars {
 			stars[i].y += stars[i].speed
@@ -61,78 +115,52 @@ func main() {
 		rl.BeginDrawing()
 		rl.ClearBackground(cotnMidnight)
 
-		// 1. Draw Background Glow
-		rl.DrawCircleGradient(200, 200, 600, rl.NewColor(26, 11, 46, 100), rl.Blank)
-
-		// 2. Draw Starfield
+		// 1. Starfield
 		for _, s := range stars {
-			rl.DrawCircle(int32(s.x), int32(s.y), s.size, rl.Fade(rl.White, 0.6))
+			rl.DrawCircle(int32(s.x), int32(s.y), s.size, rl.Fade(rl.White, 0.4))
 		}
 
-		// 3. Draw Main Glass Container
-		containerRect := rl.NewRectangle(100, 50, 800, 750)
-		rl.DrawRectangleRec(containerRect, rl.NewColor(18, 7, 33, 220)) // Glass fill
-		rl.DrawRectangleLinesEx(containerRect, 1, rl.Fade(cotnNeonMagenta, 0.5))
+		// 2. Main Glass Container
+		containerRect := rl.NewRectangle(80, 40, 840, 820)
+		rl.DrawRectangleRec(containerRect, rl.NewColor(18, 7, 33, 230))
+		rl.DrawRectangleLinesEx(containerRect, 1, rl.Fade(cotnNeonMagenta, 0.4))
 
-		// Neon Accent Line (Top)
-		rl.DrawLineEx(rl.NewVector2(100, 50), rl.NewVector2(900, 50), 2, cotnNeonMagenta)
+		// Scissor mode to keep text inside the "glass"
+		rl.BeginScissorMode(85, 45, 830, 810)
 
-		// 4. Header
-		rl.DrawText("MTX(3)", 120, 70, 20, cotnNeonMagenta)
-		rl.DrawText("C11 THREADS MANUAL", 400, 70, 16, cotnDimText)
-		rl.DrawText("MTX(3)", 820, 70, 20, cotnNeonMagenta)
+		// 3. Header (Static-ish but moves slightly with scroll if desired, here static)
+		rl.DrawText(strings.ToUpper(pageName)+"(X)", 110, 70, 20, cotnNeonMagenta)
+		rl.DrawLineEx(rl.NewVector2(110, 95), rl.NewVector2(140, 95), 2, cotnNeonMagenta)
 
-		// 5. Documentation Content
-		yOff := int32(130)
+		// 4. Render Man Page Content
+		for i, line := range manLines {
+			posY := int32(120 + scrollY + float32(i*22))
 
-		// Section: NAME
-		drawSectionHeader("NAME", 120, yOff)
-		yOff += 35
-		rl.DrawText("mtx_init, mtx_lock, mtx_unlock - mutex primitives", 120, yOff, 18, cotnBrightText)
-		yOff += 60
+			// Simple logic to highlight Section Headers (all caps lines starting with no whitespace)
+			isHeader := len(line) > 0 && !strings.HasPrefix(line, " ") && line == strings.ToUpper(line)
 
-		// Section: SYNOPSIS
-		drawSectionHeader("SYNOPSIS", 120, yOff)
-		yOff += 35
-		// Code Block Background
-		rl.DrawRectangle(120, yOff, 760, 140, rl.NewColor(5, 2, 10, 255))
-		rl.DrawRectangleLines(120, yOff, 760, 140, rl.Fade(cotnElectricBlue, 0.3))
-		
-		rl.DrawText("#include <threads.h>", 140, yOff+15, 18, cotnDimText)
-		rl.DrawText("int mtx_init(mtx_t *mtx, int type);", 140, yOff+45, 18, cotnElectricBlue)
-		rl.DrawText("int mtx_lock(mtx_t *mtx);", 140, yOff+75, 18, cotnElectricBlue)
-		rl.DrawText("int mtx_unlock(mtx_t *mtx);", 140, yOff+105, 18, cotnElectricBlue)
-		yOff += 170
+			if posY > -20 && posY < screenHeight {
+				if isHeader {
+					rl.DrawText(line, 110, posY, 20, cotnElectricBlue)
+				} else {
+					rl.DrawText(line, 110, posY, 16, cotnBrightText)
+				}
+			}
+		}
+		rl.EndScissorMode()
 
-		// Section: DESCRIPTION
-		drawSectionHeader("DESCRIPTION", 120, yOff)
-		yOff += 35
-		desc := "In the quiet of the execution cycle, mutexes serve as gatekeepers.\nA C11 mutex object ensures that only one thread can wander\nthrough a critical section at any given time."
-		rl.DrawText(desc, 120, yOff, 18, cotnBrightText)
-		yOff += 100
+		// 5. HUD/Frame Elements
+		rl.DrawLineEx(rl.NewVector2(80, 40), rl.NewVector2(920, 40), 2, cotnNeonMagenta)
 
-		// Types
-		rl.DrawText("Types:", 120, yOff, 18, cotnElectricBlue)
-		yOff += 25
-		rl.DrawText("- mtx_plain: Simple non-recursive lock.", 140, yOff, 18, cotnDimText)
-		yOff += 22
-		rl.DrawText("- mtx_recursive: Allows re-entry by the same thread.", 140, yOff, 18, cotnDimText)
+		// Bottom Status
+		rl.DrawRectangle(80, 830, 840, 30, rl.NewColor(5, 2, 10, 255))
+		rl.DrawText("UP/DOWN OR WHEEL TO WALK THROUGH THE NIGHT", 320, 840, 12, cotnDimText)
 
-		// 6. Footer
-		rl.DrawLine(120, 760, 880, 760, 1, rl.Fade(cotnDimText, 0.3))
-		rl.DrawText("C11 STANDARD - TOKYO NIGHT EDITION", 350, 775, 14, cotnDimText)
-
-		// 7. Post-Processing: Scanlines
+		// 6. Post-Processing: Scanlines
 		for i := int32(0); i < screenHeight; i += 3 {
-			rl.DrawLine(0, i, screenWidth, i, rl.NewColor(0, 0, 0, 40))
+			rl.DrawLine(0, i, screenWidth, i, rl.NewColor(0, 0, 0, 35))
 		}
 
 		rl.EndDrawing()
 	}
-}
-
-func drawSectionHeader(text string, x, y int32) {
-	// Glow line
-	rl.DrawLine(x, y+10, x+30, y+10, 2, cotnNeonMagenta)
-	rl.DrawText(text, x+40, y, 20, cotnNeonMagenta)
 }
