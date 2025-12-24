@@ -1,4 +1,4 @@
-module cotn-man-page
+module github.com/denisstrizhkin/cotn-man-page
 
 go 1.25.5
 
